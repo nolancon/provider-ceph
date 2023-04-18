@@ -18,6 +18,7 @@ package bucket
 
 import (
 	"context"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -94,6 +95,7 @@ type s3Backends map[string]*s3.S3
 // A connector is expected to produce an ExternalClient when its Connect method
 // is called.
 type connector struct {
+	mu                 sync.Mutex
 	kube               client.Client
 	usage              resource.Tracker
 	newServiceFn       func(creds []byte) (interface{}, error)
@@ -138,7 +140,9 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		}
 
 		// Create the client for the S3 Backend and update the connector's existing S3 Backends.
+		c.mu.Lock()
 		c.existingS3Backends[pc.Name] = s3internal.NewClient(secret.Data, &pc.Spec)
+		c.mu.Unlock()
 
 		return &external{s3Backends: c.existingS3Backends}, nil
 	}
@@ -157,7 +161,9 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		}
 
 		// Create the client for the S3 Backend and update the connector's existing S3 Backends.
+		c.mu.Lock()
 		c.existingS3Backends[pc.Name] = s3internal.NewClient(secret.Data, &pc.Spec)
+		c.mu.Unlock()
 	}
 
 	return &external{s3Backends: c.existingS3Backends}, nil
