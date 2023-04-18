@@ -6,8 +6,6 @@ all:
     WAIT
         BUILD +go-lint
         BUILD +go-test
-    END
-    WAIT
         BUILD +go-sec
     END
 
@@ -39,11 +37,12 @@ deps-submodules:
 
 deps-go:
     BUILD +deps-submodules
+    COPY --dir build build
+    COPY Makefile ./
     COPY go.mod go.sum ./
+    RUN make go.modules.tidy
     RUN go mod download
 
 deps-go-build:
     FROM +deps-go
-    COPY --dir build build
-    COPY Makefile ./
     RUN make generate
