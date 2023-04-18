@@ -50,8 +50,6 @@ func TestObserve(t *testing.T) {
 	}
 
 	type args struct {
-		//nolint:containedctx // It is a test.
-		//		ctx context.Context
 		mg resource.Managed
 	}
 

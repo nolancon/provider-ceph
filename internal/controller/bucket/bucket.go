@@ -55,6 +55,7 @@ const (
 	errGetCreds           = "cannot get credentials"
 	errBackendNotStored   = "s3 backend is not stored"
 	errNoS3BackendsStored = "no s3 backends stored"
+	defaultPC             = "default"
 )
 
 // A NoOpService does nothing.
@@ -128,7 +129,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// observed only on this S3 Backend. Therefore we only need to connect to his S3 Backend.
 	// An empty config reference name will be automatically set to "default".
-	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != "default" {
+	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != defaultPC {
 		// An S3 Backend was specified for this bucket, so discover the backend creds
 		// via its secret reference.
 		pc := &apisv1alpha1.ProviderConfig{}
@@ -176,6 +177,7 @@ func (c *connector) getProviderConfigSecret(ctx context.Context, secretNamespace
 	if err := c.kube.Get(ctx, ns, secret); err != nil {
 		return nil, errors.Wrap(err, "cannot get provider secret")
 	}
+
 	return secret, nil
 }
 
@@ -205,7 +207,6 @@ func (c *external) bucketExists(ctx context.Context, s3BackendName, bucketName s
 				// as we cannot verify the bucket exists.
 				return false, aerr
 			}
-
 		}
 		// Some other error occurred, return false with error
 		// as we cannot verify the bucket exists.
@@ -219,6 +220,7 @@ func (c *external) getStoredBackend(s3BackendName string) (*s3.S3, error) {
 	if s3Backend, backendExists := c.s3Backends[s3BackendName]; backendExists {
 		return s3Backend, nil
 	}
+
 	return nil, errors.New(errBackendNotStored)
 }
 
@@ -230,7 +232,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// observed only on this S3 Backend. An empty config reference name will be automatically set
 	// to "default".
-	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != "default" {
+	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != defaultPC {
 		bucketExists, err := c.bucketExists(ctx, cr.GetProviderConfigReference().Name, cr.Name)
 		if err != nil {
 			return managed.ExternalObservation{}, err
@@ -289,6 +291,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 				ConnectionDetails: managed.ConnectionDetails{},
 			}, nil
 		}
+
 		return managed.ExternalObservation{
 			// Return false when the external resource does not exist. This lets
 			// the managed resource reconciler know that it needs to call Create to
@@ -314,7 +317,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// created only on this S3 Backend. An empty config reference name will be automatically set
 	// to "default".
-	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != "default" {
+	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != defaultPC {
 		s3Backend, err := c.getStoredBackend(cr.GetProviderConfigReference().Name)
 		if err != nil {
 			return managed.ExternalCreation{}, err
@@ -373,7 +376,7 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// deleted only from this S3 Backend. An empty config reference name will be automatically set
 	// to "default".
-	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != "default" {
+	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != defaultPC {
 		s3Backend, err := c.getStoredBackend(cr.GetProviderConfigReference().Name)
 		if err != nil {
 			return err
