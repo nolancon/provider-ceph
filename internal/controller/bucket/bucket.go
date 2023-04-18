@@ -44,16 +44,17 @@ import (
 )
 
 const (
-	errNotBucket       = "managed resource is not a Bucket custom resource"
-	errTrackPCUsage    = "cannot track ProviderConfig usage"
-	errGetPC           = "cannot get ProviderConfig"
-	errListPC          = "cannot list ProviderConfigs"
-	errGetBucket       = "cannot get Bucket"
-	errListBuckets     = "cannot list Buckets"
-	errCreateBucket    = "cannot create Bucket"
-	errDeleteBucket    = "cannot delete Bucket"
-	errGetCreds        = "cannot get credentials"
-	errBackendNotFound = "s3 backend is not stored"
+	errNotBucket          = "managed resource is not a Bucket custom resource"
+	errTrackPCUsage       = "cannot track ProviderConfig usage"
+	errGetPC              = "cannot get ProviderConfig"
+	errListPC             = "cannot list ProviderConfigs"
+	errGetBucket          = "cannot get Bucket"
+	errListBuckets        = "cannot list Buckets"
+	errCreateBucket       = "cannot create Bucket"
+	errDeleteBucket       = "cannot delete Bucket"
+	errGetCreds           = "cannot get credentials"
+	errBackendNotStored   = "s3 backend is not stored"
+	errNoS3BackendsStored = "no s3 backends stored"
 )
 
 // A NoOpService does nothing.
@@ -127,7 +128,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// observed only on this S3 Backend. Therefore we only need to connect to his S3 Backend.
 	// An empty config reference name will be automatically set to "default".
-	if cr.GetProviderConfigReference().Name != "default" {
+	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != "default" {
 		// An S3 Backend was specified for this bucket, so discover the backend creds
 		// via its secret reference.
 		pc := &apisv1alpha1.ProviderConfig{}
@@ -187,7 +188,11 @@ type external struct {
 }
 
 func (c *external) bucketExists(ctx context.Context, s3BackendName, bucketName string) (bool, error) {
-	_, err := c.s3Backends[s3BackendName].HeadBucketWithContext(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucketName)})
+	s3Backend, err := c.getStoredBackend(s3BackendName)
+	if err != nil {
+		return false, err
+	}
+	_, err = s3Backend.HeadBucketWithContext(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucketName)})
 	if err != nil {
 		if aerr, ok := err.(awserr.Error); ok {
 			switch aerr.Code() {
@@ -201,13 +206,20 @@ func (c *external) bucketExists(ctx context.Context, s3BackendName, bucketName s
 				return false, aerr
 			}
 
-			// Some other error occurred, return false with error
-			// as we cannot verify the bucket exists.
-			return false, err
 		}
+		// Some other error occurred, return false with error
+		// as we cannot verify the bucket exists.
+		return false, err
 	}
 	// Bucket exists, return true with no error.
 	return true, nil
+}
+
+func (c *external) getStoredBackend(s3BackendName string) (*s3.S3, error) {
+	if s3Backend, backendExists := c.s3Backends[s3BackendName]; backendExists {
+		return s3Backend, nil
+	}
+	return nil, errors.New(errBackendNotStored)
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
@@ -218,10 +230,10 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// observed only on this S3 Backend. An empty config reference name will be automatically set
 	// to "default".
-	if cr.GetProviderConfigReference().Name != "default" {
+	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != "default" {
 		bucketExists, err := c.bucketExists(ctx, cr.GetProviderConfigReference().Name, cr.Name)
 		if err != nil {
-			return managed.ExternalObservation{}, errors.New(errGetBucket)
+			return managed.ExternalObservation{}, err
 		}
 		if bucketExists {
 			return managed.ExternalObservation{
@@ -251,10 +263,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	// No ProviderConfigReference Name specified for bucket, we can infer that his bucket is to
 	// be observed on all S3 Backends.
+	if len(c.s3Backends) == 0 {
+		return managed.ExternalObservation{}, errors.New(errNoS3BackendsStored)
+	}
+
 	for s3BackendName, _ := range c.s3Backends {
 		bucketExists, err := c.bucketExists(ctx, s3BackendName, cr.Name)
 		if err != nil {
-			return managed.ExternalObservation{}, errors.New(errGetBucket)
+			return managed.ExternalObservation{}, errors.Wrap(err, errGetBucket)
 		}
 		if bucketExists {
 			return managed.ExternalObservation{
@@ -279,8 +295,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			// (re)create the resource, or that it has successfully been deleted.
 			ResourceExists: false,
 		}, nil
-
 	}
+
 	return managed.ExternalObservation{
 		// Return false when the external resource does not exist. This lets
 		// the managed resource reconciler know that it needs to call Create to
@@ -298,8 +314,12 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// created only on this S3 Backend. An empty config reference name will be automatically set
 	// to "default".
-	if cr.GetProviderConfigReference().Name != "default" {
-		_, err := c.s3Backends[cr.GetProviderConfigReference().Name].CreateBucketWithContext(ctx, &s3.CreateBucketInput{Bucket: aws.String(cr.Name)})
+	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != "default" {
+		s3Backend, err := c.getStoredBackend(cr.GetProviderConfigReference().Name)
+		if err != nil {
+			return managed.ExternalCreation{}, err
+		}
+		_, err = s3Backend.CreateBucketWithContext(ctx, &s3.CreateBucketInput{Bucket: aws.String(cr.Name)})
 		if err != nil {
 			return managed.ExternalCreation{}, errors.Wrap(err, errCreateBucket)
 		}
@@ -313,6 +333,10 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	// No ProviderConfigReference Name specified for bucket, we can infer that his bucket is to
 	// be created on all S3 Backends.
+	if len(c.s3Backends) == 0 {
+		return managed.ExternalCreation{}, errors.New(errNoS3BackendsStored)
+	}
+
 	for _, client := range c.s3Backends {
 		_, err := client.CreateBucketWithContext(ctx, &s3.CreateBucketInput{Bucket: aws.String(cr.Name)})
 		if err != nil {
@@ -349,9 +373,12 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// deleted only from this S3 Backend. An empty config reference name will be automatically set
 	// to "default".
-	if cr.GetProviderConfigReference().Name != "default" {
-		_, err := c.s3Backends[cr.GetProviderConfigReference().Name].DeleteBucketWithContext(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
-
+	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != "default" {
+		s3Backend, err := c.getStoredBackend(cr.GetProviderConfigReference().Name)
+		if err != nil {
+			return err
+		}
+		_, err = s3Backend.DeleteBucketWithContext(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
 		if err != nil {
 			return errors.Wrap(err, errDeleteBucket)
 		}
@@ -361,6 +388,10 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 
 	// No ProviderConfigReference Name specified for bucket, we can infer that his bucket is to
 	// be deleted from all S3 Backends.
+	if len(c.s3Backends) == 0 {
+		return errors.New(errNoS3BackendsStored)
+	}
+
 	for _, client := range c.s3Backends {
 		_, err := client.DeleteBucketWithContext(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
 		if err != nil {
