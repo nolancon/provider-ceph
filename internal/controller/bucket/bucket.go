@@ -146,13 +146,13 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		}
 
 		// Create the client for the S3 Backend and update the connector's existing S3 Backends.
-		client, err := s3internal.NewClient(ctx, secret.Data, &pc.Spec)
+		s3client, err := s3internal.NewClient(ctx, secret.Data, &pc.Spec)
 		if err != nil {
 			return nil, errors.Wrap(err, errFailedToCreateClient)
 		}
 
 		c.mu.Lock()
-		c.existingS3Backends[pc.Name] = client
+		c.existingS3Backends[pc.Name] = s3client
 		c.mu.Unlock()
 
 		return &external{s3Backends: c.existingS3Backends}, nil
@@ -172,13 +172,13 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		}
 
 		// Create the client for the S3 Backend and update the connector's existing S3 Backends.
-		client, err := s3internal.NewClient(ctx, secret.Data, &pc.Spec)
+		s3client, err := s3internal.NewClient(ctx, secret.Data, &pc.Spec)
 		if err != nil {
 			return nil, errors.Wrap(err, errFailedToCreateClient)
 		}
 
 		c.mu.Lock()
-		c.existingS3Backends[pc.Name] = client
+		c.existingS3Backends[pc.Name] = s3client
 		c.mu.Unlock()
 	}
 
