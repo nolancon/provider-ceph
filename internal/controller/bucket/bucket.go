@@ -55,6 +55,7 @@ const (
 	errGetCreds           = "cannot get credentials"
 	errBackendNotStored   = "s3 backend is not stored"
 	errNoS3BackendsStored = "no s3 backends stored"
+	errCodeBucketNotFound = "NotFound"
 	defaultPC             = "default"
 )
 
@@ -196,10 +197,11 @@ func (c *external) bucketExists(ctx context.Context, s3BackendName, bucketName s
 	}
 	_, err = s3Backend.HeadBucketWithContext(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucketName)})
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
+		var aerr awserr.Error
+		if errors.As(err, aerr) {
 			switch aerr.Code() {
 			// Ceph returns "NotFound"
-			case s3.ErrCodeNoSuchBucket, "NotFound":
+			case s3.ErrCodeNoSuchBucket, errCodeBucketNotFound:
 				// Bucket does not exist, log error and return false.
 				return false, nil
 			default:
