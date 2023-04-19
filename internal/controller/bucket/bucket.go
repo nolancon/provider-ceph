@@ -22,9 +22,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -44,19 +45,21 @@ import (
 )
 
 const (
-	errNotBucket          = "managed resource is not a Bucket custom resource"
-	errTrackPCUsage       = "cannot track ProviderConfig usage"
-	errGetPC              = "cannot get ProviderConfig"
-	errListPC             = "cannot list ProviderConfigs"
-	errGetBucket          = "cannot get Bucket"
-	errListBuckets        = "cannot list Buckets"
-	errCreateBucket       = "cannot create Bucket"
-	errDeleteBucket       = "cannot delete Bucket"
-	errGetCreds           = "cannot get credentials"
-	errBackendNotStored   = "s3 backend is not stored"
-	errNoS3BackendsStored = "no s3 backends stored"
-	errCodeBucketNotFound = "NotFound"
-	defaultPC             = "default"
+	errNotBucket            = "managed resource is not a Bucket custom resource"
+	errTrackPCUsage         = "cannot track ProviderConfig usage"
+	errGetPC                = "cannot get ProviderConfig"
+	errListPC               = "cannot list ProviderConfigs"
+	errGetBucket            = "cannot get Bucket"
+	errListBuckets          = "cannot list Buckets"
+	errCreateBucket         = "cannot create Bucket"
+	errDeleteBucket         = "cannot delete Bucket"
+	errGetCreds             = "cannot get credentials"
+	errBackendNotStored     = "s3 backend is not stored"
+	errNoS3BackendsStored   = "no s3 backends stored"
+	errCodeBucketNotFound   = "NotFound"
+	errFailedToCreateClient = "failed to create s3 client"
+
+	defaultPC = "default"
 )
 
 // A NoOpService does nothing.
@@ -93,7 +96,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 }
 
 // s3Backends is a map of S3 backend name (eg ceph cluster name) to S3 client.
-type s3Backends map[string]*s3.S3
+type s3Backends map[string]*s3.Client
 
 // A connector is expected to produce an ExternalClient when its Connect method
 // is called.
@@ -143,8 +146,13 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		}
 
 		// Create the client for the S3 Backend and update the connector's existing S3 Backends.
+		client, err := s3internal.NewClient(ctx, secret.Data, &pc.Spec)
+		if err != nil {
+			return nil, errors.Wrap(err, errFailedToCreateClient)
+		}
+
 		c.mu.Lock()
-		c.existingS3Backends[pc.Name] = s3internal.NewClient(secret.Data, &pc.Spec)
+		c.existingS3Backends[pc.Name] = client
 		c.mu.Unlock()
 
 		return &external{s3Backends: c.existingS3Backends}, nil
@@ -164,8 +172,13 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		}
 
 		// Create the client for the S3 Backend and update the connector's existing S3 Backends.
+		client, err := s3internal.NewClient(ctx, secret.Data, &pc.Spec)
+		if err != nil {
+			return nil, errors.Wrap(err, errFailedToCreateClient)
+		}
+
 		c.mu.Lock()
-		c.existingS3Backends[pc.Name] = s3internal.NewClient(secret.Data, &pc.Spec)
+		c.existingS3Backends[pc.Name] = client
 		c.mu.Unlock()
 	}
 
@@ -195,20 +208,12 @@ func (c *external) bucketExists(ctx context.Context, s3BackendName, bucketName s
 	if err != nil {
 		return false, err
 	}
-	_, err = s3Backend.HeadBucketWithContext(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucketName)})
+	_, err = s3Backend.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucketName)})
 	if err != nil {
-		var aerr awserr.Error
-		if errors.As(err, aerr) {
-			switch aerr.Code() {
-			// Ceph returns "NotFound"
-			case s3.ErrCodeNoSuchBucket, errCodeBucketNotFound:
-				// Bucket does not exist, log error and return false.
-				return false, nil
-			default:
-				// AWS error occurred, return false with error
-				// as we cannot verify the bucket exists.
-				return false, aerr
-			}
+		var notFoundErr *s3types.NotFound
+		if errors.As(err, &notFoundErr) {
+			// Bucket does not exist, log error and return false.
+			return false, nil
 		}
 		// Some other error occurred, return false with error
 		// as we cannot verify the bucket exists.
@@ -218,7 +223,7 @@ func (c *external) bucketExists(ctx context.Context, s3BackendName, bucketName s
 	return true, nil
 }
 
-func (c *external) getStoredBackend(s3BackendName string) (*s3.S3, error) {
+func (c *external) getStoredBackend(s3BackendName string) (*s3.Client, error) {
 	if s3Backend, backendExists := c.s3Backends[s3BackendName]; backendExists {
 		return s3Backend, nil
 	}
@@ -324,7 +329,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		if err != nil {
 			return managed.ExternalCreation{}, err
 		}
-		_, err = s3Backend.CreateBucketWithContext(ctx, &s3.CreateBucketInput{Bucket: aws.String(cr.Name)})
+		_, err = s3Backend.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(cr.Name)})
 		if err != nil {
 			return managed.ExternalCreation{}, errors.Wrap(err, errCreateBucket)
 		}
@@ -343,7 +348,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	for _, client := range c.s3Backends {
-		_, err := client.CreateBucketWithContext(ctx, &s3.CreateBucketInput{Bucket: aws.String(cr.Name)})
+		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(cr.Name)})
 		if err != nil {
 			return managed.ExternalCreation{}, errors.Wrap(err, errCreateBucket)
 		}
@@ -383,7 +388,7 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 		if err != nil {
 			return err
 		}
-		_, err = s3Backend.DeleteBucketWithContext(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
+		_, err = s3Backend.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
 		if err != nil {
 			return errors.Wrap(err, errDeleteBucket)
 		}
@@ -398,7 +403,7 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	}
 
 	for _, client := range c.s3Backends {
-		_, err := client.DeleteBucketWithContext(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
+		_, err := client.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
 		if err != nil {
 			return errors.Wrap(err, errCreateBucket)
 		}
