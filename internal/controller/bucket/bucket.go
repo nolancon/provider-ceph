@@ -269,7 +269,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, errors.New(errNoS3BackendsStored)
 	}
 
-	for s3BackendName, _ := range c.s3Backends {
+	for s3BackendName := range c.s3Backends {
 		bucketExists, err := c.bucketExists(ctx, s3BackendName, cr.Name)
 		if err != nil {
 			return managed.ExternalObservation{}, errors.Wrap(err, errGetBucket)
