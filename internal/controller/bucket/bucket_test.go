@@ -42,7 +42,6 @@ var (
 	unexpectedItem resource.Managed
 )
 
-//nolint:dupl //test
 func TestObserve(t *testing.T) {
 	t.Parallel()
 
@@ -115,7 +114,6 @@ func TestObserve(t *testing.T) {
 	}
 }
 
-//nolint:dupl //test
 func TestCreate(t *testing.T) {
 	t.Parallel()
 

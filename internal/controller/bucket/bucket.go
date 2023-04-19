@@ -113,6 +113,8 @@ type connector struct {
 // 2. Getting the managed resource's ProviderConfig.
 // 3. Getting the credentials specified by the ProviderConfig.
 // 4. Using the credentials to form a client.
+//
+//nolint:cyclop,gocyclo //TODO: modularise func
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
 	cr, ok := mg.(*v1alpha1.Bucket)
 	if !ok {
@@ -140,20 +142,10 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		if err := c.kube.Get(ctx, types.NamespacedName{Name: cr.GetProviderConfigReference().Name}, pc); err != nil {
 			return nil, errors.Wrap(err, errGetPC)
 		}
-		secret, err := c.getProviderConfigSecret(ctx, pc.Spec.Credentials.SecretRef.Namespace, pc.Spec.Credentials.SecretRef.Name)
-		if err != nil {
+
+		if err := c.connect(ctx, pc); err != nil {
 			return nil, err
 		}
-
-		// Create the client for the S3 Backend and update the connector's existing S3 Backends.
-		s3client, err := s3internal.NewClient(ctx, secret.Data, &pc.Spec)
-		if err != nil {
-			return nil, errors.Wrap(err, errFailedToCreateClient)
-		}
-
-		c.mu.Lock()
-		c.existingS3Backends[pc.Name] = s3client
-		c.mu.Unlock()
 
 		return &external{s3Backends: c.existingS3Backends}, nil
 	}
@@ -165,24 +157,32 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	for _, pc := range pcList.Items {
-		secret, err := c.getProviderConfigSecret(ctx, pc.Spec.Credentials.SecretRef.Namespace, pc.Spec.Credentials.SecretRef.Name)
-		if err != nil {
+	for i := range pcList.Items {
+		if err := c.connect(ctx, &pcList.Items[i]); err != nil {
 			return nil, err
 		}
-
-		// Create the client for the S3 Backend and update the connector's existing S3 Backends.
-		s3client, err := s3internal.NewClient(ctx, secret.Data, &pc.Spec)
-		if err != nil {
-			return nil, errors.Wrap(err, errFailedToCreateClient)
-		}
-
-		c.mu.Lock()
-		c.existingS3Backends[pc.Name] = s3client
-		c.mu.Unlock()
 	}
 
 	return &external{s3Backends: c.existingS3Backends}, nil
+}
+
+func (c *connector) connect(ctx context.Context, pc *apisv1alpha1.ProviderConfig) error {
+	secret, err := c.getProviderConfigSecret(ctx, pc.Spec.Credentials.SecretRef.Namespace, pc.Spec.Credentials.SecretRef.Name)
+	if err != nil {
+		return err
+	}
+
+	// Create the client for the S3 Backend and update the connector's existing S3 Backends.
+	s3client, err := s3internal.NewClient(ctx, secret.Data, &pc.Spec)
+	if err != nil {
+		return errors.Wrap(err, errFailedToCreateClient)
+	}
+
+	c.mu.Lock()
+	c.existingS3Backends[pc.Name] = s3client
+	c.mu.Unlock()
+
+	return nil
 }
 
 func (c *connector) getProviderConfigSecret(ctx context.Context, secretNamespace, secretName string) (*corev1.Secret, error) {
