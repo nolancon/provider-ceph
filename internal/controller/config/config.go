@@ -17,6 +17,8 @@ limitations under the License.
 package config
 
 import (
+	"context"
+
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
@@ -39,6 +41,13 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		UsageList: v1alpha1.ProviderConfigUsageListGroupVersionKind,
 	}
 
+	// Add an 'internal' controller to the manager for the
+	// ProviderConfig. This will be used, initially, to clean
+	// up s3 backends that are no longer active.
+	if err := newReconciler().setupWithManager(mgr); err != nil {
+		return err
+	}
+
 	r := providerconfig.NewReconciler(mgr, of,
 		providerconfig.WithLogger(o.Logger.WithValues("controller", name)),
 		providerconfig.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))))
@@ -49,4 +58,21 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		For(&v1alpha1.ProviderConfig{}).
 		Watches(&source.Kind{Type: &v1alpha1.ProviderConfigUsage{}}, &resource.EnqueueRequestForProviderConfig{}).
 		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
+}
+
+func newReconciler() *Reconciler {
+	return &Reconciler{}
+}
+
+type Reconciler struct {
+}
+
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return ctrl.Result{}, nil
+}
+
+func (r *Reconciler) setupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.ProviderConfig{}).
+		Complete(r)
 }
