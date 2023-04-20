@@ -19,7 +19,13 @@ package config
 import (
 	"context"
 
+	"github.com/pkg/errors"
+	corev1 "k8s.io/api/core/v1"
+
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -29,22 +35,29 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	"github.com/crossplane/provider-ceph/apis/v1alpha1"
+	apisv1alpha1 "github.com/crossplane/provider-ceph/apis/v1alpha1"
+	"github.com/crossplane/provider-ceph/internal/backendstore"
+	s3internal "github.com/crossplane/provider-ceph/internal/s3"
+)
+
+const (
+	errCreateClient = "cannot create s3 client"
+	errGetSecret    = "cannot get Secret"
 )
 
 // Setup adds a controller that reconciles ProviderConfigs by accounting for
 // their current usage.
-func Setup(mgr ctrl.Manager, o controller.Options) error {
-	name := providerconfig.ControllerName(v1alpha1.ProviderConfigGroupKind)
+func Setup(mgr ctrl.Manager, o controller.Options, s *backendstore.BackendStore) error {
+	name := providerconfig.ControllerName(apisv1alpha1.ProviderConfigGroupKind)
 
 	of := resource.ProviderConfigKinds{
 		Config:    v1alpha1.ProviderConfigGroupVersionKind,
 		UsageList: v1alpha1.ProviderConfigUsageListGroupVersionKind,
 	}
 
-	// Add an 'internal' controller to the manager for the
-	// ProviderConfig. This will be used, initially, to clean
-	// up s3 backends that are no longer active.
-	if err := newReconciler().setupWithManager(mgr); err != nil {
+	// Add an 'internal' controller to the manager for the ProviderConfig.
+	// This will be used, initially, to manage the backendstore of s3 clients.
+	if err := newReconciler(mgr.GetClient(), s).setupWithManager(mgr); err != nil {
 		return err
 	}
 
@@ -60,19 +73,64 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
 }
 
-func newReconciler() *Reconciler {
-	return &Reconciler{}
+func newReconciler(k client.Client, s *backendstore.BackendStore) *Reconciler {
+	return &Reconciler{
+		kube:         k,
+		backendStore: s,
+	}
 }
 
 type Reconciler struct {
+	kube         client.Client
+	backendStore *backendstore.BackendStore
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	return ctrl.Result{}, nil
+	providerConfig := &apisv1alpha1.ProviderConfig{}
+	if err := r.kube.Get(ctx, req.NamespacedName, providerConfig); err != nil {
+		if kerrors.IsNotFound(err) {
+			// ProviderConfig has been deleted, remove its
+			// backend from the backend store.
+			r.backendStore.DeleteBackend(req.Name)
+
+			return ctrl.Result{}, nil
+		}
+
+		return ctrl.Result{}, err
+	}
+	// ProviderConfig has been created or updated, add or
+	// update its backend in the backend store.
+	return ctrl.Result{}, r.addOrUpdateBackend(ctx, providerConfig)
+}
+
+func (r *Reconciler) addOrUpdateBackend(ctx context.Context, pc *apisv1alpha1.ProviderConfig) error {
+	secret, err := r.getProviderConfigSecret(ctx, pc.Spec.Credentials.SecretRef.Namespace, pc.Spec.Credentials.SecretRef.Name)
+	if err != nil {
+		return err
+	}
+
+	s3client, err := s3internal.NewClient(ctx, secret.Data, &pc.Spec)
+	if err != nil {
+		return errors.Wrap(err, errCreateClient)
+	}
+
+	r.backendStore.AddOrUpdateBackend(pc.Name, s3client)
+
+	return nil
+}
+
+func (r *Reconciler) getProviderConfigSecret(ctx context.Context, secretNamespace, secretName string) (*corev1.Secret, error) {
+	secret := &corev1.Secret{}
+	ns := types.NamespacedName{Namespace: secretNamespace, Name: secretName}
+	if err := r.kube.Get(ctx, ns, secret); err != nil {
+		return nil, errors.Wrap(err, "cannot get provider secret")
+	}
+
+	return secret, nil
 }
 
 func (r *Reconciler) setupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.ProviderConfig{}).
+		For(&apisv1alpha1.ProviderConfig{}).
 		Complete(r)
 }
