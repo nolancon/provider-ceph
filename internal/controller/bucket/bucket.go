@@ -113,7 +113,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errTrackPCUsage)
 	}
 
-	return &external{backendStore: c.backendStore.GeBackendStore()}, nil
+	return &external{backendStore: c.backendStore.GetBackendStore()}, nil
 }
 
 // An ExternalClient observes, then either creates, updates, or deletes an
