@@ -52,7 +52,7 @@ func (b *BackendStore) GetAllBackends() s3Backends {
 	return b.s3Backends
 }
 
-func (b *BackendStore) GeBackendStore() *BackendStore {
+func (b *BackendStore) GetBackendStore() *BackendStore {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
