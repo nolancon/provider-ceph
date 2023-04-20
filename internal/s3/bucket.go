@@ -25,7 +25,6 @@ func BucketToCreateBucketInput(bucket *v1alpha1.Bucket) *s3.CreateBucketInput {
 		createBucketInput.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{
 			LocationConstraint: s3types.BucketLocationConstraint(bucket.Spec.ForProvider.LocationConstraint),
 		}
-
 	}
 
 	return createBucketInput
