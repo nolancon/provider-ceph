@@ -30,6 +30,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
+	"github.com/crossplane/crossplane-runtime/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
@@ -82,6 +83,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, s *backendstore.BackendStore)
 			usage:        resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
 			newServiceFn: newNoOpService,
 			backendStore: s,
+			log:          o.Logger.WithValues("controller", name),
 		}),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
@@ -101,6 +103,7 @@ type connector struct {
 	usage        resource.Tracker
 	newServiceFn func(creds []byte) (interface{}, error)
 	backendStore *backendstore.BackendStore
+	log          logging.Logger
 }
 
 // Connect typically produces an ExternalClient by:
@@ -120,6 +123,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 // external resource to ensure it reflects the managed resource's desired state.
 type external struct {
 	backendStore *backendstore.BackendStore
+	log          logging.Logger
 }
 
 func (c *external) bucketExists(ctx context.Context, s3BackendName, bucketName string) (bool, error) {
@@ -249,6 +253,8 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		if err != nil {
 			return managed.ExternalCreation{}, err
 		}
+
+		c.log.Info("Creating bucket on single s3 backend", "backend name", cr.GetProviderConfigReference().Name)
 		_, err = s3Backend.CreateBucket(ctx, s3internal.BucketToCreateBucketInput(cr))
 		if err != nil {
 			return managed.ExternalCreation{}, errors.Wrap(err, errCreateBucket)
@@ -261,12 +267,13 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		}, nil
 	}
 
-	// No ProviderConfigReference Name specified for bucket, we can infer that his bucket is to
+	// No ProviderConfigReference Name specified for bucket, we can infer that this bucket is to
 	// be created on all S3 Backends.
 	if !c.backendStore.BackendsAreStored() {
 		return managed.ExternalCreation{}, errors.New(errNoS3BackendsStored)
 	}
 
+	c.log.Info("Creating bucket on all available s3 backends")
 	for _, client := range c.backendStore.GetAllBackends() {
 		_, err := client.CreateBucket(ctx, s3internal.BucketToCreateBucketInput(cr))
 		if err != nil {
@@ -308,6 +315,9 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 		if err != nil {
 			return err
 		}
+
+		c.log.Info("Deleting bucket on single s3 backend", "backend name", cr.GetProviderConfigReference().Name)
+
 		_, err = s3Backend.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
 		if err != nil {
 			return errors.Wrap(err, errDeleteBucket)
@@ -322,6 +332,7 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 		return errors.New(errNoS3BackendsStored)
 	}
 
+	c.log.Info("Deleting bucket on all available s3 backends")
 	for _, client := range c.backendStore.GetAllBackends() {
 		_, err := client.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
 		if err != nil {

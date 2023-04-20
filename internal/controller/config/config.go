@@ -30,6 +30,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
+	"github.com/crossplane/crossplane-runtime/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/providerconfig"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
@@ -56,7 +57,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, s *backendstore.BackendStore)
 
 	// Add an 'internal' controller to the manager for the ProviderConfig.
 	// This will be used, initially, to manage the backendstore of s3 clients.
-	if err := newReconciler(mgr.GetClient(), s).setupWithManager(mgr); err != nil {
+	if err := newReconciler(mgr.GetClient(), o, s).setupWithManager(mgr); err != nil {
 		return err
 	}
 
@@ -72,24 +73,26 @@ func Setup(mgr ctrl.Manager, o controller.Options, s *backendstore.BackendStore)
 		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
 }
 
-func newReconciler(k client.Client, s *backendstore.BackendStore) *Reconciler {
+func newReconciler(k client.Client, o controller.Options, s *backendstore.BackendStore) *Reconciler {
 	return &Reconciler{
 		kube:         k,
 		backendStore: s,
+		log:          o.Logger.WithValues("internal-controller", providerconfig.ControllerName(apisv1alpha1.ProviderConfigGroupKind)),
 	}
 }
 
 type Reconciler struct {
 	kube         client.Client
 	backendStore *backendstore.BackendStore
+	log          logging.Logger
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.log.Info("Reconciling object", "name", req.Name)
 	providerConfig := &apisv1alpha1.ProviderConfig{}
 	if err := r.kube.Get(ctx, req.NamespacedName, providerConfig); err != nil {
 		if kerrors.IsNotFound(err) {
-			// ProviderConfig has been deleted, remove its
-			// backend from the backend store.
+			r.log.Info("Deleting s3 backend from backend store", "name", req.Name)
 			r.backendStore.DeleteBackend(req.Name)
 
 			return ctrl.Result{}, nil
@@ -99,6 +102,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	// ProviderConfig has been created or updated, add or
 	// update its backend in the backend store.
+	r.log.Info("Adding s3 backend to backend store", "name", req.Name)
+
 	return ctrl.Result{}, r.addOrUpdateBackend(ctx, providerConfig)
 }
 
