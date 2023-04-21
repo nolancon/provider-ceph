@@ -291,7 +291,15 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	// deleted only from this S3 Backend. An empty config reference name will be automatically set
 	// to "default".
 	if bucket.GetProviderConfigReference() != nil && bucket.GetProviderConfigReference().Name != defaultPC {
-		return c.delete(ctx, bucket.Name, bucket.GetProviderConfigReference().Name)
+		backendName := bucket.GetProviderConfigReference().Name
+		s3Backend, err := c.getStoredBackend(backendName)
+		if err != nil {
+			return err
+		}
+
+		c.log.Info("Deleting bucket on single s3 backend", "bucket name", bucket.Name, "backend name", backendName)
+
+		return c.delete(ctx, bucket.Name, s3Backend)
 	}
 
 	// No ProviderConfigReference Name specified for bucket, we can infer that his bucket is to
@@ -299,16 +307,14 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	return c.deleteAll(ctx, bucket.Name)
 }
 
-func (c *external) delete(ctx context.Context, bucketName, backendName string) error {
-	s3Backend, err := c.getStoredBackend(backendName)
+func (c *external) delete(ctx context.Context, bucketName string, s3Backend *s3.Client) error {
+	_, err := s3Backend.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucketName)})
 	if err != nil {
-		return err
-	}
+		var noSuchBucketErr *s3types.NotFound
+		if errors.As(err, &noSuchBucketErr) {
+			return nil
+		}
 
-	c.log.Info("Deleting bucket on single s3 backend", "bucket name", bucketName, "backend name", backendName)
-
-	_, err = s3Backend.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucketName)})
-	if err != nil {
 		return errors.Wrap(err, errDeleteBucket)
 	}
 
@@ -326,9 +332,7 @@ func (c *external) deleteAll(ctx context.Context, bucketName string) error {
 	for _, client := range c.backendStore.GetAllBackends() {
 		cl := client
 		g.Go(func() error {
-			_, err := cl.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucketName)})
-
-			return err
+			return c.delete(ctx, bucketName, cl)
 		})
 	}
 	if err := g.Wait(); err != nil {
