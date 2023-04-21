@@ -128,35 +128,6 @@ type external struct {
 	log          logging.Logger
 }
 
-func (c *external) bucketExists(ctx context.Context, s3BackendName, bucketName string) (bool, error) {
-	s3Backend, err := c.getStoredBackend(s3BackendName)
-	if err != nil {
-		return false, err
-	}
-	_, err = s3Backend.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucketName)})
-	if err != nil {
-		var notFoundErr *s3types.NotFound
-		if errors.As(err, &notFoundErr) {
-			// Bucket does not exist, log error and return false.
-			return false, nil
-		}
-		// Some other error occurred, return false with error
-		// as we cannot verify the bucket exists.
-		return false, err
-	}
-	// Bucket exists, return true with no error.
-	return true, nil
-}
-
-func (c *external) getStoredBackend(s3BackendName string) (*s3.Client, error) {
-	s3Backend := c.backendStore.GetBackend(s3BackendName)
-	if s3Backend != nil {
-		return s3Backend, nil
-	}
-
-	return nil, errors.New(errBackendNotStored)
-}
-
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mg.(*v1alpha1.Bucket)
 	if !ok {
@@ -242,7 +213,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 }
 
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*v1alpha1.Bucket)
+	bucket, ok := mg.(*v1alpha1.Bucket)
 	if !ok {
 		return managed.ExternalCreation{}, errors.New(errNotBucket)
 	}
@@ -250,34 +221,43 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// created only on this S3 Backend. An empty config reference name will be automatically set
 	// to "default".
-	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != defaultPC {
-		s3Backend, err := c.getStoredBackend(cr.GetProviderConfigReference().Name)
-		if err != nil {
-			return managed.ExternalCreation{}, err
-		}
-
-		c.log.Info("Creating bucket on single s3 backend", "bucket name", cr.Name, "backend name", cr.GetProviderConfigReference().Name)
-		_, err = s3Backend.CreateBucket(ctx, s3internal.BucketToCreateBucketInput(cr))
-		if err != nil {
-			return managed.ExternalCreation{}, errors.Wrap(err, errCreateBucket)
-		}
-
-		return managed.ExternalCreation{}, nil
+	if bucket.GetProviderConfigReference() != nil && bucket.GetProviderConfigReference().Name != defaultPC {
+		return c.create(ctx, bucket)
 	}
 
 	// No ProviderConfigReference Name specified for bucket, we can infer that this bucket is to
 	// be created on all S3 Backends.
+	return c.createAll(ctx, bucket)
+}
+
+func (c *external) create(ctx context.Context, bucket *v1alpha1.Bucket) (managed.ExternalCreation, error) {
+	s3Backend, err := c.getStoredBackend(bucket.GetProviderConfigReference().Name)
+	if err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	c.log.Info("Creating bucket on single s3 backend", "bucket name", bucket.Name, "backend name", bucket.GetProviderConfigReference().Name)
+	_, err = s3Backend.CreateBucket(ctx, s3internal.BucketToCreateBucketInput(bucket))
+	if err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, errCreateBucket)
+	}
+
+	return managed.ExternalCreation{}, nil
+}
+
+func (c *external) createAll(ctx context.Context, bucket *v1alpha1.Bucket) (managed.ExternalCreation, error) {
 	if !c.backendStore.BackendsAreStored() {
 		return managed.ExternalCreation{}, errors.New(errNoS3BackendsStored)
 	}
 
-	c.log.Info("Creating bucket on all available s3 backends", "bucket name", cr.Name)
+	c.log.Info("Creating bucket on all available s3 backends", "bucket name", bucket.Name)
 
 	g := new(errgroup.Group)
 	for _, client := range c.backendStore.GetAllBackends() {
 		cl := client
 		g.Go(func() error {
-			_, err := cl.CreateBucket(ctx, s3internal.BucketToCreateBucketInput(cr))
+			_, err := cl.CreateBucket(ctx, s3internal.BucketToCreateBucketInput(bucket))
+
 			return err
 		})
 	}
@@ -302,7 +282,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 }
 
 func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
-	cr, ok := mg.(*v1alpha1.Bucket)
+	bucket, ok := mg.(*v1alpha1.Bucket)
 	if !ok {
 		return errors.New(errNotBucket)
 	}
@@ -310,41 +290,79 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// deleted only from this S3 Backend. An empty config reference name will be automatically set
 	// to "default".
-	if cr.GetProviderConfigReference() != nil && cr.GetProviderConfigReference().Name != defaultPC {
-		s3Backend, err := c.getStoredBackend(cr.GetProviderConfigReference().Name)
-		if err != nil {
-			return err
-		}
-
-		c.log.Info("Deleting bucket on single s3 backend", "bucket name", cr.Name, "backend name", cr.GetProviderConfigReference().Name)
-
-		_, err = s3Backend.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
-		if err != nil {
-			return errors.Wrap(err, errDeleteBucket)
-		}
-
-		return nil
+	if bucket.GetProviderConfigReference() != nil && bucket.GetProviderConfigReference().Name != defaultPC {
+		return c.delete(ctx, bucket.Name, bucket.GetProviderConfigReference().Name)
 	}
 
 	// No ProviderConfigReference Name specified for bucket, we can infer that his bucket is to
 	// be deleted from all S3 Backends.
+	return c.deleteAll(ctx, bucket.Name)
+}
+
+func (c *external) delete(ctx context.Context, bucketName, backendName string) error {
+	s3Backend, err := c.getStoredBackend(backendName)
+	if err != nil {
+		return err
+	}
+
+	c.log.Info("Deleting bucket on single s3 backend", "bucket name", bucketName, "backend name", backendName)
+
+	_, err = s3Backend.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucketName)})
+	if err != nil {
+		return errors.Wrap(err, errDeleteBucket)
+	}
+
+	return nil
+}
+
+func (c *external) deleteAll(ctx context.Context, bucketName string) error {
 	if !c.backendStore.BackendsAreStored() {
 		return errors.New(errNoS3BackendsStored)
 	}
 
-	c.log.Info("Deleting bucket on all available s3 backends", "bucket name", cr.Name)
+	c.log.Info("Deleting bucket on all available s3 backends", "bucket name", bucketName)
 
 	g := new(errgroup.Group)
 	for _, client := range c.backendStore.GetAllBackends() {
 		cl := client
 		g.Go(func() error {
-			_, err := cl.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(cr.Name)})
+			_, err := cl.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucketName)})
+
 			return err
 		})
 	}
-	if err := g.Wait(); err == nil {
+	if err := g.Wait(); err != nil {
 		return errors.Wrap(err, errCreateBucket)
 	}
 
 	return nil
+}
+
+func (c *external) bucketExists(ctx context.Context, s3BackendName, bucketName string) (bool, error) {
+	s3Backend, err := c.getStoredBackend(s3BackendName)
+	if err != nil {
+		return false, err
+	}
+	_, err = s3Backend.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucketName)})
+	if err != nil {
+		var notFoundErr *s3types.NotFound
+		if errors.As(err, &notFoundErr) {
+			// Bucket does not exist, log error and return false.
+			return false, nil
+		}
+		// Some other error occurred, return false with error
+		// as we cannot verify the bucket exists.
+		return false, err
+	}
+	// Bucket exists, return true with no error.
+	return true, nil
+}
+
+func (c *external) getStoredBackend(s3BackendName string) (*s3.Client, error) {
+	s3Backend := c.backendStore.GetBackend(s3BackendName)
+	if s3Backend != nil {
+		return s3Backend, nil
+	}
+
+	return nil, errors.New(errBackendNotStored)
 }
