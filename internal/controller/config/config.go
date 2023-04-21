@@ -34,7 +34,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/providerconfig"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 
-	"github.com/crossplane/provider-ceph/apis/v1alpha1"
 	apisv1alpha1 "github.com/crossplane/provider-ceph/apis/v1alpha1"
 	"github.com/crossplane/provider-ceph/internal/backendstore"
 	s3internal "github.com/crossplane/provider-ceph/internal/s3"
@@ -51,8 +50,8 @@ func Setup(mgr ctrl.Manager, o controller.Options, s *backendstore.BackendStore)
 	name := providerconfig.ControllerName(apisv1alpha1.ProviderConfigGroupKind)
 
 	of := resource.ProviderConfigKinds{
-		Config:    v1alpha1.ProviderConfigGroupVersionKind,
-		UsageList: v1alpha1.ProviderConfigUsageListGroupVersionKind,
+		Config:    apisv1alpha1.ProviderConfigGroupVersionKind,
+		UsageList: apisv1alpha1.ProviderConfigUsageListGroupVersionKind,
 	}
 
 	// Add an 'internal' controller to the manager for the ProviderConfig.
@@ -68,8 +67,8 @@ func Setup(mgr ctrl.Manager, o controller.Options, s *backendstore.BackendStore)
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
-		For(&v1alpha1.ProviderConfig{}).
-		Watches(&source.Kind{Type: &v1alpha1.ProviderConfigUsage{}}, &resource.EnqueueRequestForProviderConfig{}).
+		For(&apisv1alpha1.ProviderConfig{}).
+		Watches(&source.Kind{Type: &apisv1alpha1.ProviderConfigUsage{}}, &resource.EnqueueRequestForProviderConfig{}).
 		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
 }
 
