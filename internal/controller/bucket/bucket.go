@@ -29,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
@@ -264,10 +265,14 @@ func (c *external) create(ctx context.Context, bucket *v1alpha1.Bucket) (managed
 	}
 
 	c.log.Info("Creating bucket on single s3 backend", "bucket name", bucket.Name, "backend name", bucket.GetProviderConfigReference().Name)
+	bucket.Status.SetConditions(xpv1.Creating())
+
 	_, err = s3Backend.CreateBucket(ctx, s3internal.BucketToCreateBucketInput(bucket))
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateBucket)
 	}
+
+	bucket.Status.SetConditions(xpv1.Available())
 
 	return managed.ExternalCreation{}, nil
 }
@@ -278,6 +283,7 @@ func (c *external) createAll(ctx context.Context, bucket *v1alpha1.Bucket) (mana
 	}
 
 	c.log.Info("Creating bucket on all available s3 backends", "bucket name", bucket.Name)
+	bucket.Status.SetConditions(xpv1.Creating())
 
 	g := new(errgroup.Group)
 	for _, client := range c.backendStore.GetAllBackends() {
@@ -292,14 +298,17 @@ func (c *external) createAll(ctx context.Context, bucket *v1alpha1.Bucket) (mana
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateBucket)
 	}
 
+	bucket.Status.SetConditions(xpv1.Available())
+
 	return managed.ExternalCreation{}, nil
 }
 
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
-	_, ok := mg.(*v1alpha1.Bucket)
+	bucket, ok := mg.(*v1alpha1.Bucket)
 	if !ok {
 		return managed.ExternalUpdate{}, errors.New(errNotBucket)
 	}
+	bucket.Status.SetConditions(xpv1.Available())
 
 	return managed.ExternalUpdate{
 		// Optionally return any details that may be required to connect to the
@@ -325,12 +334,15 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 		}
 
 		c.log.Info("Deleting bucket on single s3 backend", "bucket name", bucket.Name, "backend name", backendName)
+		bucket.Status.SetConditions(xpv1.Deleting())
 
 		return c.delete(ctx, bucket.Name, s3Backend)
 	}
 
 	// No ProviderConfigReference Name specified for bucket, we can infer that his bucket is to
 	// be deleted from all S3 Backends.
+	bucket.Status.SetConditions(xpv1.Deleting())
+
 	return c.deleteAll(ctx, bucket.Name)
 }
 
