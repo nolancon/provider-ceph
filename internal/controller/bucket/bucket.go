@@ -246,44 +246,75 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalCreation{}, errors.New(errNotBucket)
 	}
 
+	bucket.Status.SetConditions(xpv1.Creating())
+
 	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
 	// created only on this S3 Backend. An empty config reference name will be automatically set
 	// to "default".
 	if bucket.GetProviderConfigReference() != nil && bucket.GetProviderConfigReference().Name != defaultPC {
-		return c.create(ctx, bucket)
+		c.log.Info("Creating bucket on single s3 backend", "bucket name", bucket.Name, "backend name", bucket.GetProviderConfigReference().Name)
+
+		return managed.ExternalCreation{}, c.createOrUpdate(ctx, bucket)
 	}
 
 	// No ProviderConfigReference Name specified for bucket, we can infer that this bucket is to
 	// be created on all S3 Backends.
-	return c.createAll(ctx, bucket)
+	c.log.Info("Creating bucket on all available s3 backends", "bucket name", bucket.Name)
+
+	return managed.ExternalCreation{}, c.createOrUpdateAll(ctx, bucket)
 }
 
-func (c *external) create(ctx context.Context, bucket *v1alpha1.Bucket) (managed.ExternalCreation, error) {
-	s3Backend, err := c.getStoredBackend(bucket.GetProviderConfigReference().Name)
-	if err != nil {
-		return managed.ExternalCreation{}, err
+func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
+	bucket, ok := mg.(*v1alpha1.Bucket)
+	if !ok {
+		return managed.ExternalUpdate{}, errors.New(errNotBucket)
 	}
 
-	c.log.Info("Creating bucket on single s3 backend", "bucket name", bucket.Name, "backend name", bucket.GetProviderConfigReference().Name)
-	bucket.Status.SetConditions(xpv1.Creating())
+	// Where a bucket has a ProviderConfigReference Name, we can infer that this bucket is to be
+	// created only on this S3 Backend. An empty config reference name will be automatically set
+	// to "default".
+	if bucket.GetProviderConfigReference() != nil && bucket.GetProviderConfigReference().Name != defaultPC {
+		c.log.Info("Updating bucket on single s3 backend", "bucket name", bucket.Name, "backend name", bucket.GetProviderConfigReference().Name)
+		if err := c.createOrUpdate(ctx, bucket); err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+		// Updated successfully, set status to 'Available'.
+		bucket.Status.SetConditions(xpv1.Available())
+
+		return managed.ExternalUpdate{}, nil
+	}
+
+	// No ProviderConfigReference Name specified for bucket, we can infer that this bucket is to
+	// be created on all S3 Backends.
+	c.log.Info("Updating bucket on all available s3 backends", "bucket name", bucket.Name)
+
+	if err := c.createOrUpdateAll(ctx, bucket); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+	// Updated successfully, set status to 'Available'.
+	bucket.Status.SetConditions(xpv1.Available())
+
+	return managed.ExternalUpdate{}, nil
+}
+
+func (c *external) createOrUpdate(ctx context.Context, bucket *v1alpha1.Bucket) error {
+	s3Backend, err := c.getStoredBackend(bucket.GetProviderConfigReference().Name)
+	if err != nil {
+		return err
+	}
 
 	_, err = s3Backend.CreateBucket(ctx, s3internal.BucketToCreateBucketInput(bucket))
 	if err != nil {
-		return managed.ExternalCreation{}, errors.Wrap(err, errCreateBucket)
+		return errors.Wrap(err, errCreateBucket)
 	}
 
-	bucket.Status.SetConditions(xpv1.Available())
-
-	return managed.ExternalCreation{}, nil
+	return nil
 }
 
-func (c *external) createAll(ctx context.Context, bucket *v1alpha1.Bucket) (managed.ExternalCreation, error) {
+func (c *external) createOrUpdateAll(ctx context.Context, bucket *v1alpha1.Bucket) error {
 	if !c.backendStore.BackendsAreStored() {
-		return managed.ExternalCreation{}, errors.New(errNoS3BackendsStored)
+		return errors.New(errNoS3BackendsStored)
 	}
-
-	c.log.Info("Creating bucket on all available s3 backends", "bucket name", bucket.Name)
-	bucket.Status.SetConditions(xpv1.Creating())
 
 	g := new(errgroup.Group)
 	for _, client := range c.backendStore.GetAllBackends() {
@@ -295,26 +326,10 @@ func (c *external) createAll(ctx context.Context, bucket *v1alpha1.Bucket) (mana
 		})
 	}
 	if err := g.Wait(); err != nil {
-		return managed.ExternalCreation{}, errors.Wrap(err, errCreateBucket)
+		return errors.Wrap(err, errCreateBucket)
 	}
 
-	bucket.Status.SetConditions(xpv1.Available())
-
-	return managed.ExternalCreation{}, nil
-}
-
-func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
-	bucket, ok := mg.(*v1alpha1.Bucket)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errNotBucket)
-	}
-	bucket.Status.SetConditions(xpv1.Available())
-
-	return managed.ExternalUpdate{
-		// Optionally return any details that may be required to connect to the
-		// external resource. These will be stored as the connection secret.
-		ConnectionDetails: managed.ConnectionDetails{},
-	}, nil
+	return nil
 }
 
 func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
