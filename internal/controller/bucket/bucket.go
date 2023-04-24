@@ -128,6 +128,7 @@ type external struct {
 	log          logging.Logger
 }
 
+//nolint:cyclop,gocyclo //TODO: modularise func
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mg.(*v1alpha1.Bucket)
 	if !ok {
@@ -193,30 +194,29 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// return 'ResourceExists: true' as resulting calls to Create or Delete
 	// are idempotent.
 	for i := 0; i < len(allBackends); i++ {
-		select {
-		case result := <-bucketExistsResults:
-			if result.err != nil {
-				c.log.Info(errors.Wrap(result.err, errGetBucket).Error())
-				continue
-			}
+		result := <-bucketExistsResults
+		if result.err != nil {
+			c.log.Info(errors.Wrap(result.err, errGetBucket).Error())
 
-			if result.bucketExists {
-				return managed.ExternalObservation{
-					// Return false when the external resource does not exist. This lets
-					// the managed resource reconciler know that it needs to call Create to
-					// (re)create the resource, or that it has successfully been deleted.
-					ResourceExists: true,
+			continue
+		}
 
-					// Return false when the external resource exists, but it not up to date
-					// with the desired managed resource state. This lets the managed
-					// resource reconciler know that it needs to call Update.
-					ResourceUpToDate: false,
+		if result.bucketExists {
+			return managed.ExternalObservation{
+				// Return false when the external resource does not exist. This lets
+				// the managed resource reconciler know that it needs to call Create to
+				// (re)create the resource, or that it has successfully been deleted.
+				ResourceExists: true,
 
-					// Return any details that may be required to connect to the external
-					// resource. These will be stored as the connection secret.
-					ConnectionDetails: managed.ConnectionDetails{},
-				}, nil
-			}
+				// Return false when the external resource exists, but it not up to date
+				// with the desired managed resource state. This lets the managed
+				// resource reconciler know that it needs to call Update.
+				ResourceUpToDate: false,
+
+				// Return any details that may be required to connect to the external
+				// resource. These will be stored as the connection secret.
+				ConnectionDetails: managed.ConnectionDetails{},
+			}, nil
 		}
 	}
 
