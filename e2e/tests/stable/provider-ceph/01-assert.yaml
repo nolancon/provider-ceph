@@ -1,0 +1,12 @@
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-ceph
+status:
+  conditions:
+  - reason: HealthyPackageRevision
+    status: "True"
+    type: Healthy
+  - reason: ActivePackageRevision
+    status: "True"
+    type: Installed

@@ -4,6 +4,7 @@ services:
     network_mode: bridge
     image: localstack/localstack:latest
     container_name: localstack_main
+    hostname: localstack
     ports:
       - "4510-4559:4510-4559"
       - "4566-4583:4566-4583"

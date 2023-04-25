@@ -6,6 +6,17 @@ PROJECT_REPO := github.com/crossplane/$(PROJECT_NAME)
 PLATFORMS ?= linux_amd64 linux_arm64
 -include build/makelib/common.mk
 
+CONTROLLER_IMAGE="${BUILD_REGISTRY}/${PROJECT_NAME}-${SAFEHOSTARCH}:latest"
+TEST_CONTROLLER_IMAGE="local/${PROJECT_NAME}-${SAFEHOSTARCH}:test"
+
+# Generate kuttl e2e tests for the following kind node versions
+# TEST_KIND_NODES is not intended to be updated manually.
+# Please edit LATEST_KIND_NODE instead and run 'make update-kind-nodes'.
+TEST_KIND_NODES ?= 1.25.0,1.26.0,1.27.0
+
+LATEST_KIND_NODE ?= 1.27.0
+REPO ?= provider-ceph
+
 # ====================================================================================
 # Setup Output
 
@@ -57,6 +68,14 @@ fallthrough: submodules
 # integration tests
 e2e.run: test-integration
 
+# Update kind node versions to be tested.
+update-kind-nodes:
+	LATEST_KIND_NODE=$(LATEST_KIND_NODE) ./hack/update-kind-nodes.sh
+
+# Generate kuttl e2e tests.
+generate-tests:
+	TEST_KIND_NODES=$(TEST_KIND_NODES) REPO=$(REPO) ./hack/generate-tests.sh
+
 # Run integration tests.
 test-integration: $(KIND) $(KUBECTL) $(UP) $(HELM3)
 	@$(INFO) running integration tests using kind $(KIND_VERSION)
@@ -90,23 +109,48 @@ run: go.build
 	@# To see other arguments that can be provided, run the command with --help instead
 	$(GO_OUT_DIR)/provider --zap-devel
 
-dev: $(KIND) $(KUBECTL)
+cluster: $(KIND) $(KUBECTL) $(COMPOSE)
+	@$(INFO) Creating localstack
+	@$(COMPOSE) -f e2e/localstack/docker-compose.yml up -d
 	@$(INFO) Creating kind cluster
 	@$(KIND) create cluster --name=$(PROJECT_NAME)-dev
 	@$(KUBECTL) cluster-info --context kind-$(PROJECT_NAME)-dev
+	@$(INFO) Creating Localstack Service
+	@$(KUBECTL) apply -R -f e2e/localstack/service.yaml
+
+test-cluster: $(KIND) $(KUBECTL) $(HELM) cluster
+	@$(INFO) Installing Crossplane
+	@$(HELM) repo add crossplane-stable https://charts.crossplane.io/stable
+	@$(HELM) repo update
+	@$(HELM) install crossplane --namespace crossplane-system --create-namespace crossplane-stable/crossplane 
+
+kuttl-setup: $(KIND) $(KUBECTL) $(HELM) build test-cluster
+	@$(INFO) Tag controller image as test
+	@docker tag  $(CONTROLLER_IMAGE) $(TEST_CONTROLLER_IMAGE)
+	@$(INFO) Load controller image to kind cluster
+	@$(KIND) load docker-image $(TEST_CONTROLLER_IMAGE) --name=$(PROJECT_NAME)-dev
+
+kuttl-run: $(KUTTL) kuttl-setup
+	@$(KUTTL) test --config e2e/kuttl/provider-ceph-1.27.yaml
+	@$(MAKE) cluster-clean
+
+dev-cluster: $(KUBECTL) cluster
 	@$(INFO) Installing Crossplane CRDs
 	@$(KUBECTL) apply -k https://github.com/crossplane/crossplane//cluster?ref=master
 	@$(INFO) Installing Provider Ceph CRDs
 	@$(KUBECTL) apply -R -f package/crds
-	@$(KUBECTL) apply -R -f examples/provider/config.yaml
-	@$(INFO) Starting Provider Ceph controllers
-	@$(GO) run cmd/provider/main.go --zap-devel
+	@$(INFO) Creating Localstack Provider Config
+	@$(KUBECTL) apply -R -f e2e/localstack/localstack-provider-cfg.yaml
 
-dev-clean: $(KIND) $(KUBECTL)
+dev: dev-cluster run
+
+cluster-clean: $(KIND) $(KUBECTL) $(COMPOSE)
 	@$(INFO) Deleting kind cluster
 	@$(KIND) delete cluster --name=$(PROJECT_NAME)-dev
+	@$(INFO) Tearing down localstack
+	@$(COMPOSE) -f e2e/localstack/docker-compose.yml stop
 
-.PHONY: submodules fallthrough test-integration run dev dev-clean
+.PHONY: submodules fallthrough test-integration run cluster dev-cluster dev cluster-clean
 
 # ====================================================================================
 # Special Targets
@@ -171,4 +215,27 @@ earthly:
 ifeq (,$(wildcard $(EARTHLY)))
 	curl -sL https://github.com/earthly/earthly/releases/download/v0.7.1/earthly-linux-amd64 -o $(EARTHLY)
 	chmod +x $(EARTHLY)
+endif
+
+# Install Docker Compose to run localstack.
+COMPOSE ?= $(shell pwd)/bin/docker-compose
+compose:
+ifeq (,$(wildcard $(COMPOSE)))
+	curl -sL https://github.com/docker/compose/releases/download/v2.17.3/docker-compose-linux-x86_64 -o $(COMPOSE)
+	chmod +x $(COMPOSE)
+endif
+
+# Install Helm
+HELM ?= $(shell pwd)/bin/helm
+helm:
+ifeq (,$(wildcard $(HELM)))
+	curl -sL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | HELM_INSTALL_DIR="./bin" bash
+endif
+
+# Install Kuttl to run e2e tests
+KUTTL ?= $(shell pwd)/bin/kubectl-kuttl
+kuttl:
+ifeq (,$(wildcard $(KUTTL)))
+	curl -sL https://github.com/kudobuilder/kuttl/releases/download/v0.15.0/kubectl-kuttl_0.15.0_linux_x86_64 -o $(KUTTL)
+	chmod +x $(KUTTL)
 endif
