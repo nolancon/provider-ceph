@@ -329,13 +329,11 @@ func (c *external) delete(ctx context.Context, bucketName string, s3Backend *s3.
 	if err != nil {
 		var noSuchBucketErr *s3types.NotFound
 		if errors.As(err, &noSuchBucketErr) {
-			return nil
+			return errors.Wrap(err, errDeleteBucket)
 		}
-
-		return errors.Wrap(err, errDeleteBucket)
 	}
 
-	return nil
+	return err
 }
 
 func (c *external) deleteAll(ctx context.Context, bucketName string) error {
