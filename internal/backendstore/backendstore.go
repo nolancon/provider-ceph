@@ -48,8 +48,13 @@ func (b *BackendStore) GetBackend(backendName string) *s3.Client {
 func (b *BackendStore) GetAllBackends() s3Backends {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// Create a new s3Backends to hold a copy of the backends
+	backends := make(s3Backends, len(b.s3Backends))
+	for k, v := range b.s3Backends {
+		backends[k] = v
+	}
 
-	return b.s3Backends
+	return backends
 }
 
 func (b *BackendStore) GetBackendStore() *BackendStore {
