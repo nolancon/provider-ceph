@@ -109,6 +109,9 @@ run: go.build
 	@# To see other arguments that can be provided, run the command with --help instead
 	$(GO_OUT_DIR)/provider --zap-devel
 
+# Spin up a Kind cluster and localstack.
+# Create k8s service to allows pods to communicate with
+# localstack.
 cluster: $(KIND) $(KUBECTL) $(COMPOSE)
 	@$(INFO) Creating localstack
 	@$(COMPOSE) -f e2e/localstack/docker-compose.yml up -d
@@ -118,22 +121,33 @@ cluster: $(KIND) $(KUBECTL) $(COMPOSE)
 	@$(INFO) Creating Localstack Service
 	@$(KUBECTL) apply -R -f e2e/localstack/service.yaml
 
-test-cluster: $(KIND) $(KUBECTL) $(HELM) cluster
+# Spin up a Kind cluster and localstack and install Crossplane via Helm.
+crossplane-cluster: $(KIND) $(KUBECTL) $(HELM) cluster
 	@$(INFO) Installing Crossplane
 	@$(HELM) repo add crossplane-stable https://charts.crossplane.io/stable
 	@$(HELM) repo update
 	@$(HELM) install crossplane --namespace crossplane-system --create-namespace crossplane-stable/crossplane 
 
-kuttl-setup: $(KIND) $(KUBECTL) $(HELM) build test-cluster
+# Spin up a Kind cluster and localstack and install Crossplane via Helm.
+# Build the provider-ceph controller image and load it into the Kind cluster.
+kuttl-setup: $(KIND) $(KUBECTL) $(HELM) build crossplane-cluster
 	@$(INFO) Tag controller image as test
 	@docker tag  $(CONTROLLER_IMAGE) $(TEST_CONTROLLER_IMAGE)
 	@$(INFO) Load controller image to kind cluster
 	@$(KIND) load docker-image $(TEST_CONTROLLER_IMAGE) --name=$(PROJECT_NAME)-dev
 
+# Spin up a Kind cluster and localstack and install Crossplane via Helm.
+# Build the provider-ceph controller image and load it into the Kind cluster.
+# Run Kuttl test suite on newly built controller image.
+# Destroy Kind and localstack.
 kuttl-run: $(KUTTL) kuttl-setup
 	@$(KUTTL) test --config e2e/kuttl/provider-ceph-1.27.yaml
 	@$(MAKE) cluster-clean
 
+# Spin up a Kind cluster and localstack and install Crossplane CRDs (not
+# containerised Crossplane componenets).
+# Install local provider-ceph CRDs.
+# Create ProviderConfig CR representing localstack.
 dev-cluster: $(KUBECTL) cluster
 	@$(INFO) Installing Crossplane CRDs
 	@$(KUBECTL) apply -k https://github.com/crossplane/crossplane//cluster?ref=master
@@ -142,8 +156,11 @@ dev-cluster: $(KUBECTL) cluster
 	@$(INFO) Creating Localstack Provider Config
 	@$(KUBECTL) apply -R -f e2e/localstack/localstack-provider-cfg.yaml
 
+# Best for development - locally run provider-ceph controller.
+# Removes need for Crossplane install via Helm.
 dev: dev-cluster run
 
+# Destroy Kind cluster and localstack.
 cluster-clean: $(KIND) $(KUBECTL) $(COMPOSE)
 	@$(INFO) Deleting kind cluster
 	@$(KIND) delete cluster --name=$(PROJECT_NAME)-dev
