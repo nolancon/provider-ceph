@@ -1,6 +1,0 @@
-apiVersion: pkg.crossplane.io/v1
-kind: Provider
-metadata:
-  name: provider-ceph
-spec:
-  package: nolancon/provider-ceph:test

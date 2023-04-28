@@ -6,9 +6,6 @@ PROJECT_REPO := github.com/crossplane/$(PROJECT_NAME)
 PLATFORMS ?= linux_amd64 linux_arm64
 -include build/makelib/common.mk
 
-CONTROLLER_IMAGE="${BUILD_REGISTRY}/${PROJECT_NAME}-${SAFEHOSTARCH}:latest"
-TEST_CONTROLLER_IMAGE="local/${PROJECT_NAME}-${SAFEHOSTARCH}:test"
-
 # Generate kuttl e2e tests for the following kind node versions
 # TEST_KIND_NODES is not intended to be updated manually.
 # Please edit LATEST_KIND_NODE instead and run 'make update-kind-nodes'.
@@ -53,6 +50,8 @@ XPKG_REG_ORGS ?= xpkg.upbound.io/crossplane
 XPKG_REG_ORGS_NO_PROMOTE ?= xpkg.upbound.io/crossplane
 XPKGS = provider-ceph
 -include build/makelib/xpkg.mk
+
+-include build/makelib/local.xpkg.mk
 
 # Husky git hook manager tasks.
 -include .husky/husky.mk
@@ -115,33 +114,47 @@ run: go.build
 cluster: $(KIND) $(KUBECTL) $(COMPOSE)
 	@$(INFO) Creating localstack
 	@$(COMPOSE) -f e2e/localstack/docker-compose.yml up -d
+	@$(OK) Creating localstack
 	@$(INFO) Creating kind cluster
-	@$(KIND) create cluster --name=$(PROJECT_NAME)-dev
-	@$(KUBECTL) cluster-info --context kind-$(PROJECT_NAME)-dev
+	@$(KIND) create cluster --name=$(KIND_CLUSTER_NAME)
+	@$(OK) Creating kind cluster
 	@$(INFO) Creating Localstack Service
 	@$(KUBECTL) apply -R -f e2e/localstack/service.yaml
+	@$(OK) Creating Localstack Service
 
 # Spin up a Kind cluster and localstack and install Crossplane via Helm.
-crossplane-cluster: $(KIND) $(KUBECTL) $(HELM3) cluster
+crossplane-cluster: $(HELM3) cluster
 	@$(INFO) Installing Crossplane
 	@$(HELM3) repo add crossplane-stable https://charts.crossplane.io/stable
 	@$(HELM3) repo update
 	@$(HELM3) install crossplane --namespace crossplane-system --create-namespace crossplane-stable/crossplane
+	@$(OK) Installing Crossplane
+
+
+# Build the controller image and the provider package. 
+# Load the controller image to the Kind cluster and add the provider package
+# to the Provider.
+# The following is taken from local.xpkg.deploy.provider.
+# However, it is modified to use the "--zap-devel" flag instead of "-d" which does
+# not exist in this project and would therefore cause the controller to CrashLoop.
+load-package: $(KIND) build
+	@$(MAKE) local.xpkg.sync
+	@$(INFO) deploying provider package $(PROJECT_NAME)
+	@$(KIND) load docker-image $(BUILD_REGISTRY)/$(PROJECT_NAME)-$(ARCH) -n $(KIND_CLUSTER_NAME)
+	@echo '{"apiVersion":"pkg.crossplane.io/v1alpha1","kind":"ControllerConfig","metadata":{"name":"config"},"spec":{"args":["--zap-devel"],"image":"$(BUILD_REGISTRY)/$(PROJECT_NAME)-$(ARCH)"}}' | $(KUBECTL) apply -f -
+	@echo '{"apiVersion":"pkg.crossplane.io/v1","kind":"Provider","metadata":{"name":"$(PROJECT_NAME)"},"spec":{"package":"$(PROJECT_NAME)-$(VERSION).gz","packagePullPolicy":"Never","controllerConfigRef":{"name":"config"}}}' | $(KUBECTL) apply -f -
+	@$(OK) deploying provider package $(PROJECT_NAME) $(VERSION)
 
 # Spin up a Kind cluster and localstack and install Crossplane via Helm.
-# Build the provider-ceph controller image and load it into the Kind cluster.
-kuttl-setup: $(KIND) $(KUBECTL) $(HELM) build crossplane-cluster
-	@$(INFO) Tag controller image as test
-	@docker tag  $(CONTROLLER_IMAGE) $(TEST_CONTROLLER_IMAGE)
-	@$(INFO) Load controller image to kind cluster
-	@$(KIND) load docker-image $(TEST_CONTROLLER_IMAGE) --name=$(PROJECT_NAME)-dev
-
-# Spin up a Kind cluster and localstack and install Crossplane via Helm.
-# Build the provider-ceph controller image and load it into the Kind cluster.
+# Build the controller image and the provider package. 
+# Load the controller image to the Kind cluster and add the provider package
+# to the Provider.
 # Run Kuttl test suite on newly built controller image.
 # Destroy Kind and localstack.
-kuttl-run: $(KUTTL) kuttl-setup
+kuttl-run: $(KUTTL) crossplane-cluster load-package
+	@$(INFO) Running kuttl test suite
 	@$(KUTTL) test --config e2e/kuttl/provider-ceph-1.27.yaml
+	@$(OK) Running kuttl test suite
 	@$(MAKE) cluster-clean
 
 # Spin up a Kind cluster and localstack and install Crossplane CRDs (not
@@ -149,12 +162,11 @@ kuttl-run: $(KUTTL) kuttl-setup
 # Install local provider-ceph CRDs.
 # Create ProviderConfig CR representing localstack.
 dev-cluster: $(KUBECTL) cluster
-	@$(INFO) Installing Crossplane CRDs
+	@$(INFO) Installing CRDs and ProviderConfig
 	@$(KUBECTL) apply -k https://github.com/crossplane/crossplane//cluster?ref=master
-	@$(INFO) Installing Provider Ceph CRDs
 	@$(KUBECTL) apply -R -f package/crds
-	@$(INFO) Creating Localstack Provider Config
 	@$(KUBECTL) apply -R -f e2e/localstack/localstack-provider-cfg.yaml
+	@$(OK) Installing CRDs and ProviderConfig
 
 # Best for development - locally run provider-ceph controller.
 # Removes need for Crossplane install via Helm.
@@ -163,9 +175,11 @@ dev: dev-cluster run
 # Destroy Kind cluster and localstack.
 cluster-clean: $(KIND) $(KUBECTL) $(COMPOSE)
 	@$(INFO) Deleting kind cluster
-	@$(KIND) delete cluster --name=$(PROJECT_NAME)-dev
+	@$(KIND) delete cluster --name=$(KIND_CLUSTER_NAME)
+	@$(OK) Deleting kind cluster
 	@$(INFO) Tearing down localstack
 	@$(COMPOSE) -f e2e/localstack/docker-compose.yml stop
+	@$(OK) Tearing down localstack
 
 .PHONY: submodules fallthrough test-integration run cluster dev-cluster dev cluster-clean
 
