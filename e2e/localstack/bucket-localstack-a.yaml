@@ -1,0 +1,9 @@
+apiVersion: provider-ceph.ceph.crossplane.io/v1alpha1
+kind: Bucket
+metadata:
+  name: bucket-localstack-a
+spec:
+  forProvider:
+    configurableField: test
+  providerConfigRef:
+    name: localstack-a
