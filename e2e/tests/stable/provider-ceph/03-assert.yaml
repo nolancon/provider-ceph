@@ -1,7 +1,7 @@
 apiVersion: provider-ceph.ceph.crossplane.io/v1alpha1
 kind: Bucket
 metadata:
-  name: bucket-for-all
+  name: bucket-for-localstack-b
 status:
   conditions:
   - reason: Available

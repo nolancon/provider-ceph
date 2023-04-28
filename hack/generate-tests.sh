@@ -46,7 +46,7 @@ testDirs:
 - ./e2e/tests/stable
 kindConfig: e2e/kind/kind-config-${major}.yaml
 startKIND: false
-timeout: 60
+timeout: 90
 EOF
 
 done

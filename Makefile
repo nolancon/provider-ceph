@@ -111,7 +111,7 @@ run: go.build
 # Spin up a Kind cluster and localstack.
 # Create k8s service to allows pods to communicate with
 # localstack.
-cluster: $(KIND) $(KUBECTL) $(COMPOSE)
+cluster: $(KIND) $(KUBECTL) $(COMPOSE) cluster-clean
 	@$(INFO) Creating localstack
 	@$(COMPOSE) -f e2e/localstack/docker-compose.yml up -d
 	@$(OK) Creating localstack
@@ -151,7 +151,7 @@ load-package: $(KIND) build
 # to the Provider.
 # Run Kuttl test suite on newly built controller image.
 # Destroy Kind and localstack.
-kuttl-run: $(KUTTL) crossplane-cluster load-package
+kuttl: $(KUTTL) crossplane-cluster load-package
 	@$(INFO) Running kuttl test suite
 	@$(KUTTL) test --config e2e/kuttl/provider-ceph-1.27.yaml
 	@$(OK) Running kuttl test suite
