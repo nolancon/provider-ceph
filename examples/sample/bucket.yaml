@@ -3,7 +3,6 @@ kind: Bucket
 metadata:
   name: test-bucket
 spec:
-  forProvider:
-    configurableField: test
+  forProvider: {}
   providerConfigRef:
     name: ceph-admin-cfg

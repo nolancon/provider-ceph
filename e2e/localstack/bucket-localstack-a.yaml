@@ -3,7 +3,6 @@ kind: Bucket
 metadata:
   name: bucket-localstack-a
 spec:
-  forProvider:
-    configurableField: test
+  forProvider: {}
   providerConfigRef:
     name: localstack-a
