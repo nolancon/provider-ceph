@@ -122,11 +122,11 @@ cluster: $(KIND) $(KUBECTL) $(COMPOSE)
 	@$(KUBECTL) apply -R -f e2e/localstack/service.yaml
 
 # Spin up a Kind cluster and localstack and install Crossplane via Helm.
-crossplane-cluster: $(KIND) $(KUBECTL) $(HELM) cluster
+crossplane-cluster: $(KIND) $(KUBECTL) $(HELM3) cluster
 	@$(INFO) Installing Crossplane
-	@$(HELM) repo add crossplane-stable https://charts.crossplane.io/stable
-	@$(HELM) repo update
-	@$(HELM) install crossplane --namespace crossplane-system --create-namespace crossplane-stable/crossplane 
+	@$(HELM3) repo add crossplane-stable https://charts.crossplane.io/stable
+	@$(HELM3) repo update
+	@$(HELM3) install crossplane --namespace crossplane-system --create-namespace crossplane-stable/crossplane
 
 # Spin up a Kind cluster and localstack and install Crossplane via Helm.
 # Build the provider-ceph controller image and load it into the Kind cluster.
@@ -240,19 +240,4 @@ compose:
 ifeq (,$(wildcard $(COMPOSE)))
 	curl -sL https://github.com/docker/compose/releases/download/v2.17.3/docker-compose-linux-x86_64 -o $(COMPOSE)
 	chmod +x $(COMPOSE)
-endif
-
-# Install Helm
-HELM ?= $(shell pwd)/bin/helm
-helm:
-ifeq (,$(wildcard $(HELM)))
-	curl -sL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | HELM_INSTALL_DIR="./bin" bash
-endif
-
-# Install Kuttl to run e2e tests
-KUTTL ?= $(shell pwd)/bin/kubectl-kuttl
-kuttl:
-ifeq (,$(wildcard $(KUTTL)))
-	curl -sL https://github.com/kudobuilder/kuttl/releases/download/v0.15.0/kubectl-kuttl_0.15.0_linux_x86_64 -o $(KUTTL)
-	chmod +x $(KUTTL)
 endif
