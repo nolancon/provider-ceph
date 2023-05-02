@@ -111,7 +111,7 @@ run: go.build
 # Spin up a Kind cluster and localstack.
 # Create k8s service to allows pods to communicate with
 # localstack.
-cluster: $(KIND) $(KUBECTL) $(COMPOSE) cluster-clean
+cluster: $(KIND) $(KUBECTL) $(COMPOSE)
 	@$(INFO) Creating localstack
 	@$(COMPOSE) -f e2e/localstack/docker-compose.yml up -d
 	@$(OK) Creating localstack
